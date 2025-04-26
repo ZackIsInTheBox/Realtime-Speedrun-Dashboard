@@ -5,6 +5,9 @@ import time
 import socket
 import numpy as np
 import altair as alt
+import csv
+import plotly.graph_objects as go
+import math
 
 lsCommands = ["getdelta",
               "getlastsplittime",
@@ -76,6 +79,26 @@ def getIndex():
 
 #  ----Pace Bar-----------------------------------------------------
 
+def makeLine(df):
+    line = alt.Chart(df).mark_line(point=True).encode(
+        x=alt.X('Split:Q', axis=alt.Axis(labels=False), title=None),
+        y=alt.Y('Delta:Q', axis=alt.Axis(labels=False, title=None),
+                scale=alt.Scale(domain=[df['Delta'].min(),df['Delta'].max()]))).properties(
+        width=600, height=300, title='Pace Bar').interactive()
+    zero_line = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(color='gray',
+                                                              strokeDash=[4, 4]).encode(y='y:Q')
+    # Background bands (as rectangles)
+    background = alt.Chart(pd.DataFrame({
+        'y': [-10000, 0],  # Y min/max of the green band
+        'y2': [0, 10000],  # Y min/max of the red band
+        'Color': ['green', 'red']
+    })).mark_rect(opacity=0.1).encode(
+        y='y:Q',
+        y2='y2:Q',
+        color=alt.Color('Color:N', scale=None)  # Use fixed colors
+    )
+    st.altair_chart(line + zero_line + background, use_container_width=True,)
+
 if int(getIndex()) != -1:  # If timer is active
     if 'splits' not in st.session_state:  # Initialise split data
         st.session_state.splits = [{'Split': 0, 'Delta': 0}]  # Create empty split list
@@ -99,77 +122,106 @@ if int(getIndex()) != -1:  # If timer is active
 
     # Add current time
     st.session_state.splits.append({'Split': getCurrentTime(),  # Create new current
-                                  'Delta': st.session_state.splits[-1]['Delta']})
+                                   'Delta': st.session_state.splits[-1]['Delta']})
 
-    # Create DataFrame
-    df = pd.DataFrame(st.session_state.splits)
-    df['FormattedDelta'] = df['Delta'].apply(secondsToDelta)
     # Create the line chart
-    line = alt.Chart(df).mark_line(point=True).encode(
-        x=alt.X('Split:Q', axis=alt.Axis(labels=False), title=None),
-        y=alt.Y('Delta:Q', axis=alt.Axis(labels=False, title=None),
-                scale=alt.Scale(domain=[df['Delta'].min(),df['Delta'].max()]))).properties(
-        width=600, height=300, title='Pace Bar').interactive()
-    zero_line = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(color='gray',
-        strokeDash=[4, 4]).encode(y='y:Q')
-    # Background bands (as rectangles)
-    background = alt.Chart(pd.DataFrame({
-        'y': [-10000, 0],  # Y min/max of the green band
-        'y2': [0, 10000],  # Y min/max of the red band
-        'Color': ['green', 'red']
-    })).mark_rect(opacity=0.1).encode(
-        y='y:Q',
-        y2='y2:Q',
-        color=alt.Color('Color:N', scale=None)  # Use fixed colors
-    )
-    st.altair_chart(line + zero_line + background, use_container_width=True,)
+    df = pd.DataFrame(st.session_state.splits)
+    makeLine(df)
 
-
-else:
+else:  # If timer is inactive
     st.session_state.splits = [{'Split': 0, 'Delta': 0}]
     st.session_state.splits.append({'Split': getCurrentTime(),  # Create new current
-                                  'Delta': st.session_state.splits[-1]['Delta']})
+                                    'Delta': st.session_state.splits[-1]['Delta']})
     # Create DataFrame
     df = pd.DataFrame(st.session_state.splits)
-    # Create the line chart
-    chart = alt.Chart(df).mark_line(point=True).encode(
-        x='Split:Q',
-        y='Delta:Q'
-    ).properties(
-        width=600,
-        height=300,
-        title='Split Delta Over Time'
-    ).interactive()
-    st.altair_chart(chart, use_container_width=True)
+    makeLine(df)
+
 
 #  ----Split Indicators-----------------------------------------------------
 
 # Get split data
+splits = []
+with open('dummySplits.csv', newline='') as csvfile:
+    splitsReader = csv.reader(csvfile, delimiter=' ', quotechar='|')
+    splitsReader.__next__()
+    for row in splitsReader:
+        splits.append(row[0].split(','))
+prevSplit = 0
+for split in splits:
+    split[1] = splitToSeconds(split[1])  # Split Time
+    split[2] = splitToSeconds(split[2])  # Gold Time
+    split.append(split[1]-prevSplit)  # Segment Time
+    prevSplit = split[1]
+    # Get relative progress through split as decimal
+    split.append((getCurrentTime() - st.session_state.splits[-2]['Split']) / split[3])
 
+# Let it overfill, and turn red if so
 
-# Progress arc
-progress_arc = alt.Chart(split_data).mark_arc(innerRadius=30, outerRadius=50).encode(
-    theta=alt.Theta('Progress:Q', stack='zero'),  # angle = progress
-    color=alt.value('steelblue')
-)
+# Create ring
+def makeRing(splitProgression, size, label, gold):
+    if splitProgression > 1:
+        behind = True
+        splitProgression -= 1
+    else:
+        behind = False
 
-# Background arc (full circle)
-background_arc = alt.Chart(split_data).mark_arc(innerRadius=30, outerRadius=50, color='lightgray').encode(
-    theta=alt.value(1)  # full circle
-)
+    # Make ring
+    fig = go.Figure(go.Pie(
+        values=[splitProgression, 1 - splitProgression],
+        hole=0.7,
+        marker_colors=['red' if behind else 'green', 'green' if behind else 'white'],
+        textinfo='none',
+        sort=False))
 
-# Optional: Gold marker (use a tick or thin line if you want)
-gold_marker = alt.Chart(split_data).mark_tick(thickness=2, color='gold', size=30).encode(
-    theta=alt.Theta('GoldRatio:Q', scale=alt.Scale(domain=[0, 1])),
-    radius=alt.value(55)
-)
+    # Add gold indicator
+    angle = -360 * gold + 90
+    x0 = 0.5 + 0.265 * math.cos(math.radians(angle))
+    y0 = 0.5 + 0.265 * math.sin(math.radians(angle))
+    x1 = 0.5 + 0.382 * math.cos(math.radians(angle))
+    y1 = 0.5 + 0.382 * math.sin(math.radians(angle))
+    fig.add_shape(
+        type="line",
+        x0=x0, y0=y0,
+        x1=x1, y1=y1,
+        line=dict(color="gold", width=3),
+        xref="paper", yref="paper"
+    )
 
-# Combine
-chart = background_arc + progress_arc + gold_marker
-st.altair_chart(chart, use_container_width=False)
+    # Add split name in ring
+    fig.update_layout(
+        showlegend=False,
+        margin=dict(t=0, b=0, l=0, r=0),
+        annotations=[dict(text=label, x=0.5, y=0.5, font_size=24, showarrow=False)],
+        width=size, height=size)
+    return(fig)
+
+col1, col2, col3 = st.columns(3)
+with col3:
+    split = splits[int(getIndex())]
+    st.plotly_chart(makeRing(split[4], 300, split[0], split[2] / split[3]),
+                    use_container_width=True)
+
+with col2:
+    if getIndex() - 1 >= 0:
+        split = splits[int(getIndex()) - 1]
+        splitProgression = (st.session_state.splits[-2]['Split'] -
+                            st.session_state.splits[-3]['Split']
+                            ) / split[3]
+        st.plotly_chart(makeRing(splitProgression, 150, split[0], split[2] / split[3])
+                        , use_container_width=True)
+
+with col1:
+    split = splits[int(getIndex())]
+    if getIndex() - 2 >= 0:
+        split = splits[int(getIndex()) - 2]
+        splitProgression = (st.session_state.splits[-3]['Split'] -
+                            st.session_state.splits[-4]['Split']
+                            ) / split[3]
+        st.plotly_chart(makeRing(splitProgression, 150, split[0], split[2] / split[3])
+                        , use_container_width=True)
 
 
 #  ----Repeat-----------------------------------------------------
 
-time.sleep(0.5)
+time.sleep(1)
 st.rerun()
