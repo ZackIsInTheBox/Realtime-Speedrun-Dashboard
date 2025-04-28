@@ -10,6 +10,7 @@ import saltysplits as ss
 import json
 import numpy as np
 import time
+import random
 
 lsCommands = ["getdelta",
               "getlastsplittime",
@@ -35,6 +36,8 @@ except ConnectionRefusedError:
 def splitToSeconds(time):
     if time is None:
         return None
+    if time[0] == '\u2212':  # Runner uses offset (uses unicode '-' not ASCII)
+        return 0
     parts = time.split(':')
     if len(parts) == 3:
         hours, minutes, seconds = parts
@@ -80,6 +83,10 @@ def getIndex():
     index = lsGet("getsplitindex")
     return splitToSeconds(index)
 
+def getBPT():
+    index = lsGet("getbestpossibletime")
+    return splitToSeconds(index)
+
 # ----Preamble----------------------------------------------------
 
 def makeSplitDF():  # Create dataframe for live splits
@@ -89,7 +96,7 @@ def makeSplitDF():  # Create dataframe for live splits
 makeSplitDF()
 
 # Create SaltySplits object for splits file
-splits = ss.read_lss(lss_path="dummySplits.lss")
+splits = ss.read_lss(lss_path="dummySplits2.lss")
 
 # Store pb times
 pbTimes = []
@@ -108,13 +115,20 @@ splitNames = []
 for i in range(len(splits.segments)):
     splitNames.append(splits.segments[i].name)
 
-# Store 10 most recent runs
+# Store 100 most recent runs
 recentRuns = []
 for i in range(len(splits.segments)):
     segs = []
-    for j in range(-11, -1):
+    for j in range(-101, -1):
         seg = json.loads(splits.segments[i].segment_history[j].model_dump_json())
         segs.append(splitToSeconds(seg['real_time']))
+    segs = [x for x in segs if x is not None]  # Remove None values (skipped splits)
+    # Remove outliers (1.5x upper percentile (no point removing lower percentile))
+    q1 = np.percentile(segs, 25)
+    q3 = np.percentile(segs, 75)
+    iqr = q3 - q1
+    upper_bound = q3 + 2 * iqr
+    segs = [x for x in segs if x <= upper_bound]
     recentRuns.append(segs)
 
 
@@ -266,9 +280,8 @@ def ConsistencyTracker(min_attempts):
         st.warning("Not enough split history to analyse variance")
         return
 
-    data = recentRuns[currentSplit]
-    data = [x for x in data if x is not None]  # Delete None values (skipped splits)
     splitName = splitNames[currentSplit]
+    data = recentRuns[currentSplit]
     df = pd.DataFrame({'Split Time (s)': data, 'Split': splitName})
 
     minTime, maxTime = min(data) - 10, max(data) + 10
@@ -284,42 +297,81 @@ def ConsistencyTracker(min_attempts):
 
     boxPlot.update_yaxes(range=[minTime, maxTime])  # Zoom to range of times
 
-    st.plotly_chart(boxPlot, use_container_width=False)
+    return boxPlot
 
-def PBPotential():
-    pb_potential_percent = 50
+def PBPotential(simulations):
+    # Calculate PB potential - run X simulations on current pace, using random splits from recentRuns
 
-    r = int(255 * (1 - (pb_potential_percent / 100)))
-    g = int(255 * (pb_potential_percent / 100))
+    currentSplit = int(getIndex())
+    simulatedSuccesses = 0
+    for simulation in range(simulations):
+        currentSimulation = st.session_state.splits[-2]['Split']  # Set simulation to current run time
+        for split in range(currentSplit, len(splits.segments)):  # Iterate through all remaining splits
+            currentSimulation += random.choice(recentRuns[split])   # Add random recent time
+        if currentSimulation < pbTimes[-1]:
+            simulatedSuccesses += 1
+        pbPotential = simulatedSuccesses / simulations * 100
+
+    r = int(255 * (1 - (pbPotential / 100)))
+    g = int(255 * (pbPotential / 100))
     b = 0
     colour = '#{0:02X}{1:02X}{2:02X}'.format(r, g, b)
 
-    fig = go.Figure(go.Indicator(
-        mode = "gauge+number",
-        value = pb_potential_percent,
-        gauge = {
+    gauge = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=pbPotential,
+        number={'suffix': '%'},
+        gauge={
             'axis': {'range': [0, 100],
                      'showticklabels': False},
             'bar': {'color': colour},
-        }
+            }
     ))
-    st.plotly_chart(fig)
+
+    gauge.update_layout(
+        title={'text': 'PB Potential',
+               'font': {'size': 34},
+               'y':0.9,
+               'x':0.5,
+               'xanchor': 'center',
+               'yanchor': 'top'
+               }
+    )
+
+    return gauge
+
+
 
 # ----RunTime--------------------------------------------------------
-
 @st.fragment(run_every="1s")
 def RunTime():
-    if getIndex() == -1:
-        st.warning("Waiting for split data")
-        return
     try:
+        if getIndex() == -1:   # Check if timer is running
+            st.warning("Waiting for split data")
+            return
         st.subheader('Pace Bar')
+
         PaceBar()
         st.subheader('Split Progression')
         SplitRings()
         st.subheader('Consistency Tracker')
-        ConsistencyTracker(min_attempts=10)
-        PBPotential()
+
+        if st.session_state.last_split != getIndex():  # Check if split has changed
+            st.session_state.consistencyTracker = ConsistencyTracker(min_attempts=10)
+            try:
+                st.session_state.pbPotential = PBPotential(simulations=100)
+            except (IndexError, KeyError, TypeError) as skipped:
+                pass
+
+        st.plotly_chart(st.session_state.consistencyTracker, use_container_width=True)
+        st.plotly_chart(st.session_state.pbPotential, use_container_width=True)
+
+        st.session_state.last_split = getIndex()
+
     except ConnectionAbortedError:
         st.warning("Could not establish connection to Livesplit Server")
+
+st.session_state.consistencyTracker = ConsistencyTracker(min_attempts=10)
+st.session_state.pbPotential = PBPotential(simulations=100)
+st.session_state.last_split = getIndex()
 RunTime()
