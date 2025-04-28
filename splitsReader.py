@@ -39,7 +39,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 # Loading (and validating) LSS file
-splits = ss.read_lss(lss_path="dummySplits.lss")
+splits = ss.read_lss(lss_path="dummySplits2.lss")
 
 # Getting the first split of the first run (i.e. Time instance)
 y = json.loads(splits.segments[0].split_times[0].model_dump_json())
@@ -48,5 +48,9 @@ dataframe = splits.to_df(cumulative=False, allow_partial=True)
 # Getting best split for all segments (including those in partial runs)
 best_segments = dataframe.min(axis=1)
 
-print(len(splits.segments))
+print(len(splits.to_df(cumulative=True, allow_partial=False).columns
+      ))
 #print(best_segments)
+
+finishedRuns = splits.to_df(cumulative=True, allow_partial=True).iloc[-1].dropna().tolist()
+# Compare each successive finished run to create a list of PBs

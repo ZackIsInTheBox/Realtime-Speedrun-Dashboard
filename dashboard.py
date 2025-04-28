@@ -2,9 +2,9 @@ import streamlit as st
 import pandas as pd
 import socket
 import altair as alt
-import csv
 import plotly.graph_objects as go
 import plotly.express as px
+from _plotly_utils.exceptions import PlotlyError
 import math
 import saltysplits as ss
 import json
@@ -59,6 +59,22 @@ def secondsToDelta(seconds):
         timeStr = f"{minutes:02}:{seconds:05.2f}"
     return f"-{timeStr}" if isNegative else f"+{timeStr}"
 
+def secondsToHMS(seconds):
+    hours = int(seconds) // 3600
+    minutes = (int(seconds) % 3600) // 60
+    secs = int(seconds) % 60
+    if hours > 0:
+        return f"{hours}:{minutes:02}:{secs:02}"
+    else:
+        return f"{minutes}:{secs:02}"
+
+def timedeltaToHMS(timedelta):
+    seconds = int(timedelta.total_seconds())
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    seconds = seconds % 60
+    return f"{hours:02}:{minutes:02}:{seconds:02}"
+
 def lsGet(command):
     ls.send((command + "\r\n").encode())
     return ls.recv(1024).decode()[:-2]
@@ -90,13 +106,13 @@ def getBPT():
 # ----Preamble----------------------------------------------------
 
 def makeSplitDF():  # Create dataframe for live splits
-    st.session_state.splits = [{'Split': 0, 'Delta': 0}]  # Create empty split list
-    st.session_state.splits.append({'Split': getCurrentTime(),  # Create new current
-                                    'Delta': st.session_state.splits[-1]['Delta']})
+    st.session_state.liveSplits = [{'Split': 0, 'Delta': 0}]  # Create empty split list
+    st.session_state.liveSplits.append({'Split': getCurrentTime(),  # Create new current
+                                    'Delta': st.session_state.liveSplits[-1]['Delta']})
 makeSplitDF()
 
 # Create SaltySplits object for splits file
-splits = ss.read_lss(lss_path="dummySplits2.lss")
+splits = ss.read_lss(lss_path="dummySplits.lss")
 
 # Store pb times
 pbTimes = []
@@ -115,20 +131,24 @@ splitNames = []
 for i in range(len(splits.segments)):
     splitNames.append(splits.segments[i].name)
 
+# Stores the number of runs were all splits were completed
+fullRuns = len(splits.to_df(cumulative=True, allow_partial=False).columns)
+
 # Store 100 most recent runs
 recentRuns = []
 for i in range(len(splits.segments)):
     segs = []
-    for j in range(-101, -1):
+    for j in range(max(-fullRuns, -100), -1):
         seg = json.loads(splits.segments[i].segment_history[j].model_dump_json())
         segs.append(splitToSeconds(seg['real_time']))
     segs = [x for x in segs if x is not None]  # Remove None values (skipped splits)
     # Remove outliers (1.5x upper percentile (no point removing lower percentile))
-    q1 = np.percentile(segs, 25)
-    q3 = np.percentile(segs, 75)
-    iqr = q3 - q1
-    upper_bound = q3 + 2 * iqr
-    segs = [x for x in segs if x <= upper_bound]
+    if len(segs) > 0:
+        q1 = np.percentile(segs, 25)
+        q3 = np.percentile(segs, 75)
+        iqr = q3 - q1
+        upper_bound = q3 + 2 * iqr
+        segs = [x for x in segs if x <= upper_bound]
     recentRuns.append(segs)
 
 
@@ -157,32 +177,32 @@ def PaceBar():
 
     if int(getIndex()) != -1:  # If timer is active
 
-        del st.session_state.splits[-1]  # Delete last current point
-        currentSplit = len(st.session_state.splits) - 1  # No. of splits = size of DF (minus current)
+        del st.session_state.liveSplits[-1]  # Delete last current point
+        currentSplit = len(st.session_state.liveSplits) - 1  # No. of splits = size of DF (minus current)
 
         if int(getIndex()) < currentSplit:  # UNDO
-            del st.session_state.splits[-1]  # Delete last split
+            del st.session_state.liveSplits[-1]  # Delete last split
             currentSplit -= 1
 
         if int(getIndex()) > currentSplit:  # SPLIT/SKIP
             if getLastSplitTime() != 0.0:  # SPLIT
-                st.session_state.splits.append({'Split': getLastSplitTime(), 'Delta': getDelta()})
+                st.session_state.liveSplits.append({'Split': getLastSplitTime(), 'Delta': getDelta()})
             else:  # SKIP
-                st.session_state.splits.append({'Skip': 0,
-                    'Delta': st.session_state.splits[-1]['Delta']})  # SKIP - add dummy data
+                st.session_state.liveSplits.append({'Skip': 0,
+                    'Delta': st.session_state.liveSplits[-1]['Delta']})  # SKIP - add dummy data
             currentSplit += 1
 
         # Add back current point
-        st.session_state.splits.append({'Split': getCurrentTime(),
-                                       'Delta': st.session_state.splits[-1]['Delta']})
+        st.session_state.liveSplits.append({'Split': getCurrentTime(),
+                                       'Delta': st.session_state.liveSplits[-1]['Delta']})
 
         # Create the line chart
-        df = pd.DataFrame(st.session_state.splits)
+        df = pd.DataFrame(st.session_state.liveSplits)
         makeLine(df)
 
     else:  # If timer is inactive
         makeSplitDF()
-        df = pd.DataFrame(st.session_state.splits)  # Create DataFrame
+        df = pd.DataFrame(st.session_state.liveSplits)  # Create DataFrame
         makeLine(df)
 
 def SplitRings():
@@ -229,7 +249,7 @@ def SplitRings():
         try:
             currentSplit = int(getIndex())
             splitProgression = ((getCurrentTime() -
-                                 st.session_state.splits[-2]['Split']) /
+                                 st.session_state.liveSplits[-2]['Split']) /
                                 pbTimes[currentSplit])
             goldProgression = (goldTimes[currentSplit] / (pbTimes[currentSplit] -
                                                           pbTimes[currentSplit-1]))
@@ -244,8 +264,8 @@ def SplitRings():
         if getIndex() - 1 >= 0:
             try:
                 currentSplit = int(getIndex()) - 1
-                splitProgression = ((st.session_state.splits[-2]['Split'] -
-                                     st.session_state.splits[-3]['Split']) /
+                splitProgression = ((st.session_state.liveSplits[-2]['Split'] -
+                                     st.session_state.liveSplits[-3]['Split']) /
                                     pbTimes[currentSplit])
                 goldProgression = (goldTimes[currentSplit] / (pbTimes[currentSplit] -
                                                               pbTimes[currentSplit-1]))
@@ -261,8 +281,8 @@ def SplitRings():
         if getIndex() - 2 >= 0:
             try:
                 currentSplit = int(getIndex()) - 2
-                splitProgression = ((st.session_state.splits[-3]['Split'] -
-                                     st.session_state.splits[-4]['Split']) /
+                splitProgression = ((st.session_state.liveSplits[-3]['Split'] -
+                                     st.session_state.liveSplits[-4]['Split']) /
                                     pbTimes[currentSplit])
                 goldProgression = (goldTimes[currentSplit] / (pbTimes[currentSplit] -
                                                               pbTimes[currentSplit-1]))
@@ -274,11 +294,8 @@ def SplitRings():
                 st.warning("Split skipped")
                 pass
 
-def ConsistencyTracker(min_attempts):
+def ConsistencyTracker():
     currentSplit = int(getIndex())
-    if len(recentRuns[currentSplit]) < min_attempts:
-        st.warning("Not enough split history to analyse variance")
-        return
 
     splitName = splitNames[currentSplit]
     data = recentRuns[currentSplit]
@@ -295,17 +312,22 @@ def ConsistencyTracker(min_attempts):
         margin=dict(l=40, r=40, t=40, b=40),
     )
 
-    boxPlot.update_yaxes(range=[minTime, maxTime])  # Zoom to range of times
+    boxPlot.update_yaxes(
+        range=[minTime, maxTime],
+        tickvals=list(range(int(minTime), int(maxTime), 3)),  # Create labels on y-axis
+        ticktext=[secondsToHMS(s) for s in range(int(minTime), int(maxTime), 3)],  # Convert labels to MM:SS
+    )
 
     return boxPlot
 
 def PBPotential(simulations):
     # Calculate PB potential - run X simulations on current pace, using random splits from recentRuns
 
+    global pbPotential
     currentSplit = int(getIndex())
     simulatedSuccesses = 0
     for simulation in range(simulations):
-        currentSimulation = st.session_state.splits[-2]['Split']  # Set simulation to current run time
+        currentSimulation = st.session_state.liveSplits[-2]['Split']  # Set simulation to current run time
         for split in range(currentSplit, len(splits.segments)):  # Iterate through all remaining splits
             currentSimulation += random.choice(recentRuns[split])   # Add random recent time
         if currentSimulation < pbTimes[-1]:
@@ -327,51 +349,132 @@ def PBPotential(simulations):
             'bar': {'color': colour},
             }
     ))
-
-    gauge.update_layout(
-        title={'text': 'PB Potential',
-               'font': {'size': 34},
-               'y':0.9,
-               'x':0.5,
-               'xanchor': 'center',
-               'yanchor': 'top'
-               }
-    )
+    gauge.update_layout(height=400)
 
     return gauge
 
+def RunSummary():
+    attempts = splits.attempt_count
+    # Find all finished runs by filtering runs where the last split is not empty
+    finishedRuns = splits.to_df(cumulative=True, allow_partial=True).iloc[-1].dropna()
+    # Compare each successive finished run to create a list of PBs
+    pbs = []
+    currentBest = pd.Timedelta(days=9999)
+    for run in finishedRuns:
+        if run < currentBest:
+            pbs.append(run)
+            currentBest = run
+
+    avg = pd.DataFrame(finishedRuns.tail(min(fullRuns, 10))).mean()
+    avg = timedeltaToHMS(avg[0])
+
+    game = splits.game_name
+    category = splits.category_name
+
+    if attempts > 0:
+        resetRate = (1 - (len(finishedRuns) / attempts)) * 100
+        pbRate = (len(pbs) / attempts) * 100
+    else:
+        resetRate = 0
+        pbRate = 0
+
+    st.markdown(f"### 🎮 {game} - {category}")
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric(label="Attempts", value=attempts)
+    col2.metric(label="Reset Rate", value=f"{resetRate:.1f}%")
+    col3.metric(label="PB Rate", value=f"{pbRate:.1f}%")
+    col4.metric(label="Average (Prev. 10)", value=avg)
+
+    with st.container():
+        df = pd.DataFrame(pbs, columns=['PBTimes'])
+        df['FormattedTime'] = df['PBTimes'].apply(lambda x: str(x).split(".")[0]
+                                                      if pd.notna(x) else None)
+        df["DateTime"] = pd.to_datetime(df["PBTimes"], unit="ns")
+        df['PB'] = range(1, len(df) + 1)
+
+        line = alt.Chart(df, title=alt.Title("PB History")).mark_line().encode(
+            x=alt.X('PB:Q', title='PB'),
+            y=alt.Y('DateTime:T', title='PB Time', axis=alt.Axis(format='%H:%M:%S')),
+            tooltip=[alt.Tooltip('FormattedTime:N', title='Split Time')]
+        )
+
+        st.altair_chart(line, use_container_width=True)
 
 
 # ----RunTime--------------------------------------------------------
-@st.fragment(run_every="1s")
-def RunTime():
-    try:
-        if getIndex() == -1:   # Check if timer is running
-            st.warning("Waiting for split data")
-            return
-        st.subheader('Pace Bar')
 
-        PaceBar()
-        st.subheader('Split Progression')
-        SplitRings()
-        st.subheader('Consistency Tracker')
+st.set_page_config(layout="wide")
+
+@st.fragment(run_every="1s")
+def RunTime(min_attempts=10):
+    try:
+        col1, col2 = st.columns(2)
+        with col1:
+            with st.container(border=True):
+                st.subheader('📈 Pace Bar')
+                if getIndex() == -1:   # Check if timer is running
+                    st.warning("Waiting for split data")
+                else:
+                    PaceBar()
+
+            with st.container(border=True):
+                st.subheader('⌛ Split Progression')
+                if getIndex() == -1:   # Check if timer is running
+                    st.warning("Waiting for split data")
+                else:
+                    SplitRings()
 
         if st.session_state.last_split != getIndex():  # Check if split has changed
-            st.session_state.consistencyTracker = ConsistencyTracker(min_attempts=10)
+            if fullRuns > min_attempts:  # Check if enough data is available
+                st.session_state.consistencyTracker = ConsistencyTracker()
             try:
-                st.session_state.pbPotential = PBPotential(simulations=100)
+                if fullRuns >= 1:  # Make sure there is data to analyse
+                    st.session_state.pbPotential = PBPotential(simulations=100)
             except (IndexError, KeyError, TypeError) as skipped:
                 pass
 
-        st.plotly_chart(st.session_state.consistencyTracker, use_container_width=True)
-        st.plotly_chart(st.session_state.pbPotential, use_container_width=True)
+        with col2:
+            with st.container(border=True):
+                st.subheader('🎯 Consistency Tracker')
+                if fullRuns < min_attempts:
+                    st.warning("Not enough split history to analyse variance")
+                elif getIndex() == -1:   # Check if timer is running
+                    st.warning("Waiting for split data")
+                else:
+                    st.plotly_chart(st.session_state.consistencyTracker, use_container_width=True)
+
+            with st.container(border=True):
+                st.subheader('🚨 PB Potential')
+                if fullRuns < 1:
+                    st.warning("Not enough split history to analyse variance")
+                elif getIndex() == -1:   # Check if timer is running
+                    st.warning("Waiting for split data")
+                else:
+                    try:
+                        st.plotly_chart(st.session_state.pbPotential, use_container_width=True)
+                    except PlotlyError:
+                        st.warning("Not enough split history to analyse variance")
+
+                with st.expander("How is this calculated?", expanded=False):
+                    st.write("100 potential runs are simulated using random segments from your"
+                             " recent runs. Your PB Potential is the number of randomised simulated"
+                             " runs that beat your PB.")
+
+            with st.expander("📝 Run Summary", expanded=True):
+                RunSummary()
 
         st.session_state.last_split = getIndex()
 
     except ConnectionAbortedError:
         st.warning("Could not establish connection to Livesplit Server")
 
-st.session_state.consistencyTracker = ConsistencyTracker(min_attempts=10)
-st.session_state.pbPotential = PBPotential(simulations=100)
+min_attempts = 10
+if fullRuns > min_attempts:  # Check if enough data is available
+    st.session_state.consistencyTracker = ConsistencyTracker()
+try:
+    st.session_state.pbPotential = PBPotential(simulations=100)
+except IndexError:
+    st.session_state.pbPotential = 0
 st.session_state.last_split = getIndex()
 RunTime()
