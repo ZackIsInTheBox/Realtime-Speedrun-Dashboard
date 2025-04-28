@@ -1,4 +1,8 @@
 import csv
+import requests
+import xml.etree.ElementTree as ET
+
+'''
 def splitToSeconds(time):
     parts = time.split(':')
     if len(parts) == 3:
@@ -27,3 +31,22 @@ for split in splits:
     prevSplit = split[1]
 
 print(splits)
+'''
+
+import saltysplits as ss
+import json
+import pandas as pd
+from datetime import datetime, timedelta
+
+# Loading (and validating) LSS file
+splits = ss.read_lss(lss_path="dummySplits.lss")
+
+# Getting the first split of the first run (i.e. Time instance)
+y = json.loads(splits.segments[0].split_times[0].model_dump_json())
+
+dataframe = splits.to_df(cumulative=False, allow_partial=True)
+# Getting best split for all segments (including those in partial runs)
+best_segments = dataframe.min(axis=1)
+
+print(len(splits.segments))
+#print(best_segments)

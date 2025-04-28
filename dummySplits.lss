@@ -17,7 +17,7 @@
     </Variables>
     <CustomVariables />
   </Metadata>
-  <Offset>-00:00:15</Offset>
+  <Offset>00:00:15</Offset>
   <AttemptCount>3537</AttemptCount>
   <AttemptHistory>
     <Attempt id="1" started="07/23/2020 05:28:34" isStartedSynced="True" ended="07/23/2020 05:28:37" isEndedSynced="True" />
