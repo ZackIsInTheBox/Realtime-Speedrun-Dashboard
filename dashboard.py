@@ -11,6 +11,7 @@ import json
 import numpy as np
 import time
 import random
+import argparse
 
 lsCommands = ["getdelta",
               "getlastsplittime",
@@ -23,15 +24,6 @@ lsCommands = ["getdelta",
               "getprevioussplitname"]
 
 # -----Define LiveSplit Server Functions----------------------------------------------------
-
-# Connect to Livesplit server
-try:
-    ls = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    ls.connect(("localhost", 16834))
-except ConnectionRefusedError:
-    st.warning("Could not establish connection to Livesplit Server")
-    time.sleep(2)
-    st.rerun()
 
 def splitToSeconds(time):
     """
@@ -124,8 +116,6 @@ def getIndex():
     index = lsGet("getsplitindex")
     return splitToSeconds(index)
 
-# ----Preamble----------------------------------------------------
-
 def makeSplitDF():
     """
     Creates a blank dataframe for storing current run split data in the Streamlit session storage.
@@ -133,51 +123,7 @@ def makeSplitDF():
     """
     st.session_state.liveSplits = [{'Split': 0, 'Delta': 0}]  # Create empty split list
     st.session_state.liveSplits.append({'Split': getCurrentTime(),  # Create new current
-                                    'Delta': st.session_state.liveSplits[-1]['Delta']})
-makeSplitDF()
-
-# Create SaltySplits object for splits file
-splits = ss.read_lss(lss_path="dummySplits.lss")
-
-# Store pb times
-pbTimes = []
-for i in range(len(splits.segments)):
-    seg = json.loads(splits.segments[i].split_times[0].model_dump_json())
-    pbTimes.append(splitToSeconds(seg['real_time']))
-
-# Store best segments
-goldTimes = []
-for i in range(len(splits.segments)):
-    seg = json.loads(splits.segments[i].best_segment_time.model_dump_json())
-    goldTimes.append(splitToSeconds(seg['real_time']))
-
-# Store split names
-splitNames = []
-for i in range(len(splits.segments)):
-    splitNames.append(splits.segments[i].name)
-
-# Stores the number of runs were all splits were completed
-fullRuns = len(splits.to_df(cumulative=True, allow_partial=False).columns)
-
-# Store 100 most recent runs
-recentRuns = []
-for i in range(len(splits.segments)):
-    segs = []
-    for j in range(max(-fullRuns, -100), -1):  # If splits contain less than 100 runs, take max
-        seg = json.loads(splits.segments[i].segment_history[j].model_dump_json())
-        segs.append(splitToSeconds(seg['real_time']))
-
-    segs = [x for x in segs if x is not None]  # Remove None values (skipped splits)
-
-    # Remove outliers (1.5x upper percentile (no point removing lower percentile))
-    if len(segs) > 0:
-        q1 = np.percentile(segs, 25)
-        q3 = np.percentile(segs, 75)
-        iqr = q3 - q1
-        upper_bound = q3 + 2 * iqr
-        segs = [x for x in segs if x <= upper_bound]
-    recentRuns.append(segs)
-
+                                        'Delta': st.session_state.liveSplits[-1]['Delta']})
 
 # ----Create Features-----------------------------------------------------
 
@@ -218,7 +164,7 @@ def PaceBar():
             color=alt.Color('Color:N', scale=None)  # Use fixed colors
         )
         # Construct graph
-        st.altair_chart(line + pbLine + background, use_container_width=True,)
+        st.altair_chart(line + pbLine + background, use_container_width=True)
 
     if int(getIndex()) != -1:  # If timer is active
 
@@ -309,11 +255,12 @@ def SplitRings():
     with col3:  # Current split ring
         try:
             currentSplit = int(getIndex())
+            print(getCurrentTime(), st.session_state.liveSplits[-2]['Split'], pbTimes[currentSplit])
             splitProgression = ((getCurrentTime() -
                                  st.session_state.liveSplits[-2]['Split']) /
-                                pbTimes[currentSplit])
-            goldProgression = (goldTimes[currentSplit] / (pbTimes[currentSplit] -
-                                                          pbTimes[currentSplit-1]))
+                                (pbTimes[currentSplit + 1] - pbTimes[currentSplit]))
+            goldProgression = (goldTimes[currentSplit] / (pbTimes[currentSplit + 1] -
+                                                          pbTimes[currentSplit]))
             st.plotly_chart(makeRing(splitProgression, 300, splitNames[currentSplit],
                                      goldProgression),
                             use_container_width=True)
@@ -327,9 +274,9 @@ def SplitRings():
                 currentSplit = int(getIndex()) - 1
                 splitProgression = ((st.session_state.liveSplits[-2]['Split'] -
                                      st.session_state.liveSplits[-3]['Split']) /
-                                    pbTimes[currentSplit])
-                goldProgression = (goldTimes[currentSplit] / (pbTimes[currentSplit] -
-                                                              pbTimes[currentSplit-1]))
+                                    (pbTimes[currentSplit + 1] - pbTimes[currentSplit]))
+                goldProgression = (goldTimes[currentSplit] / (pbTimes[currentSplit + 1] -
+                                                              pbTimes[currentSplit]))
                 st.plotly_chart(makeRing(splitProgression, 150,
                                          splitNames[currentSplit],
                                          goldProgression),
@@ -344,9 +291,9 @@ def SplitRings():
                 currentSplit = int(getIndex()) - 2
                 splitProgression = ((st.session_state.liveSplits[-3]['Split'] -
                                      st.session_state.liveSplits[-4]['Split']) /
-                                    pbTimes[currentSplit])
-                goldProgression = (goldTimes[currentSplit] / (pbTimes[currentSplit] -
-                                                              pbTimes[currentSplit-1]))
+                                    (pbTimes[currentSplit + 1] - pbTimes[currentSplit]))
+                goldProgression = (goldTimes[currentSplit] / (pbTimes[currentSplit + 1] -
+                                                              pbTimes[currentSplit]))
                 st.plotly_chart(makeRing(splitProgression, 150,
                                          splitNames[currentSplit],
                                          goldProgression),
@@ -382,9 +329,9 @@ def ConsistencyTracker():
     boxPlot.update_yaxes(
         range=[minTime, maxTime],
         # Create labels on y-axis at interval 3 (smaller interval = more labels)
-        tickvals=list(range(int(minTime), int(maxTime), 3)),
+        tickvals=list(range(int(minTime), int(maxTime), 5)),
         # Convert labels to MM:SS
-        ticktext=[secondsToHMS(s) for s in range(int(minTime), int(maxTime), 3)],
+        ticktext=[secondsToHMS(s) for s in range(int(minTime), int(maxTime), 5)],
     )
 
     return boxPlot
@@ -453,7 +400,7 @@ def RunSummary():
 
     # Calculate the average run time from the runner's (up to) 10 most recent runs
     avg = pd.DataFrame(finishedRuns.tail(min(fullRuns, 10))).mean()
-    avg = timedeltaToHMS(avg[0])
+    avg = timedeltaToHMS(avg.iloc[0])
 
     game = splits.game_name
     category = splits.category_name
@@ -524,15 +471,16 @@ def RunTime(min_attempts=10):
                 else:
                     SplitRings()
 
-        # Only update consistency tracker and PB potential on split changes to reduce system load
-        if st.session_state.last_split != getIndex():  # Check if split has changed
-            if fullRuns > min_attempts:  # Check if enough data is available
-                st.session_state.consistencyTracker = ConsistencyTracker()
+        if fullRuns > min_attempts:  # Check if enough data is available
             try:
-                if fullRuns >= 1:  # Make sure there is data to analyse
-                    st.session_state.pbPotential = PBPotential(simulations=100)
+                st.session_state.consistencyTracker = ConsistencyTracker()
             except (IndexError, KeyError, TypeError) as skipped:
                 pass
+        try:
+            if fullRuns >= 1:  # Make sure there is data to analyse
+                st.session_state.pbPotential = PBPotential(simulations=100)
+        except (IndexError, KeyError, TypeError) as skipped:
+            pass
 
         # Consistency Tracker, PB Potential Gauge, collapsable Run Summary
         with col2:
@@ -565,17 +513,85 @@ def RunTime(min_attempts=10):
             with st.expander("📝 Run Summary", expanded=True):
                 RunSummary()
 
-        st.session_state.last_split = getIndex()
-
     except ConnectionAbortedError:
         st.warning("Could not establish connection to Livesplit Server")
 
-min_attempts = 10
-if fullRuns > min_attempts:  # Check if enough data is available
-    st.session_state.consistencyTracker = ConsistencyTracker()
-try:
-    st.session_state.pbPotential = PBPotential(simulations=100)
-except IndexError:
-    st.session_state.pbPotential = 0
-st.session_state.last_split = getIndex()
-RunTime()
+def main(args):
+    global ls
+    global pbTimes
+    global goldTimes
+    global splitNames
+    global recentRuns
+    global splits
+    global recentRuns
+    global fullRuns
+
+    # Connect to Livesplit server
+    try:
+        ls = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        ls.connect(("localhost", 16834))
+    except ConnectionRefusedError:
+        st.warning("Could not establish connection to Livesplit Server")
+        time.sleep(2)
+        st.rerun()
+
+    # Create SaltySplits object for splits file
+    splits = ss.read_lss(lss_path=args.splitFile)
+
+    # Store pb times
+    pbTimes = [0]
+    for i in range(len(splits.segments)):
+        seg = json.loads(splits.segments[i].split_times[0].model_dump_json())
+        pbTimes.append(splitToSeconds(seg['real_time']))
+
+    # Store best segments
+    goldTimes = []
+    for i in range(len(splits.segments)):
+        seg = json.loads(splits.segments[i].best_segment_time.model_dump_json())
+        goldTimes.append(splitToSeconds(seg['real_time']))
+
+    # Store split names
+    splitNames = []
+    for i in range(len(splits.segments)):
+        splitNames.append(splits.segments[i].name)
+
+    # Stores the number of runs were all splits were completed
+    fullRuns = len(splits.to_df(cumulative=True, allow_partial=False).columns)
+
+    # Store 100 most recent runs
+    recentRuns = []
+    for i in range(len(splits.segments)):
+        segs = []
+        for j in range(max(-fullRuns, -100), -1):  # If splits contain less than 100 runs, take max
+            seg = json.loads(splits.segments[i].segment_history[j].model_dump_json())
+            segs.append(splitToSeconds(seg['real_time']))
+
+        segs = [x for x in segs if x is not None]  # Remove None values (skipped splits)
+
+        # Remove outliers (1.5x upper percentile (no point removing lower percentile))
+        if len(segs) > 0:
+            q1 = np.percentile(segs, 25)
+            q3 = np.percentile(segs, 75)
+            iqr = q3 - q1
+            upper_bound = q3 + 2 * iqr
+            segs = [x for x in segs if x <= upper_bound]
+        recentRuns.append(segs)
+
+    makeSplitDF()
+
+    min_attempts = 10
+    if fullRuns > min_attempts:  # Check if enough data is available
+        st.session_state.consistencyTracker = ConsistencyTracker()
+    try:
+        st.session_state.pbPotential = PBPotential(simulations=100)
+    except IndexError:
+        st.session_state.pbPotential = 0
+
+    RunTime()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Speedrun Dashboard")
+    parser.add_argument("splitFile", type=str, help="Path to your split file")
+    args = parser.parse_args()
+    main(args)
