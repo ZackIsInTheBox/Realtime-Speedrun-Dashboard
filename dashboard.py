@@ -255,7 +255,6 @@ def SplitRings():
     with col3:  # Current split ring
         try:
             currentSplit = int(getIndex())
-            print(getCurrentTime(), st.session_state.liveSplits[-2]['Split'], pbTimes[currentSplit])
             splitProgression = ((getCurrentTime() -
                                  st.session_state.liveSplits[-2]['Split']) /
                                 (pbTimes[currentSplit + 1] - pbTimes[currentSplit]))
@@ -471,6 +470,9 @@ def RunTime(min_attempts=10):
                 else:
                     SplitRings()
 
+            with st.expander("📝 Run Summary", expanded=True):
+                RunSummary()
+
         if fullRuns > min_attempts:  # Check if enough data is available
             try:
                 st.session_state.consistencyTracker = ConsistencyTracker()
@@ -509,9 +511,6 @@ def RunTime(min_attempts=10):
                     st.write("100 potential runs are simulated using random segments from your"
                              " recent runs. Your PB Potential is the number of randomised simulated"
                              " runs that beat your PB.")
-
-            with st.expander("📝 Run Summary", expanded=True):
-                RunSummary()
 
     except ConnectionAbortedError:
         st.warning("Could not establish connection to Livesplit Server")
@@ -573,7 +572,7 @@ def main(args):
             q1 = np.percentile(segs, 25)
             q3 = np.percentile(segs, 75)
             iqr = q3 - q1
-            upper_bound = q3 + 2 * iqr
+            upper_bound = q3 + 1.5 * iqr
             segs = [x for x in segs if x <= upper_bound]
         recentRuns.append(segs)
 
