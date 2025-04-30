@@ -8,7 +8,7 @@ The SaltySplits Livesplit file parser currently causes a crash if you use a nega
 Make sure you have the Livesplit Server component within your Layout. This can be found in the "Control" tab when you add a component. It should be set to the port 16834 by default.
 
 # Running the dashboard
-To run the dashboard, run `streamlit run speedrunDashboard.py {SPLITS.lss}` from a command-line within the dashboard folder directory. This should open the dashboard in a browser window.
+To run the dashboard, run `streamlit run speedrunDashboard.py SPLITS.lss` from a command-line within the dashboard folder directory. This should open the dashboard in a browser window.
 
 Don't forget to start the Livesplit server by right-clicking on your splits -> Control -> Start Server. If you change layout or re-open your splits this may have to be started again.
 
