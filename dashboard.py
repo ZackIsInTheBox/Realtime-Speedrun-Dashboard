@@ -169,7 +169,7 @@ def PaceBar():
     if int(getIndex()) != -1:  # If timer is active
 
         del st.session_state.liveSplits[-1]  # Delete last current point
-        currentSplit = len(st.session_state.liveSplits) - 1  # No. of splits = size of DF (minus current)
+        currentSplit = len(st.session_state.liveSplits) - 1  # No. of splits = size of DF (minus 0 split)
 
         if int(getIndex()) < currentSplit:  # UNDO
             del st.session_state.liveSplits[-1]  # Delete last split
@@ -453,6 +453,11 @@ def RunTime(min_attempts=10):
     tracker, PB potential)
     """
     try:
+        if len(st.session_state.liveSplits) - 2 != getIndex():  # Check if split has changed
+            splitChange = True
+        else:
+            splitChange = False
+
         col1, col2 = st.columns(2)
         # Pace bar, Split Progression
         with col1:
@@ -471,16 +476,17 @@ def RunTime(min_attempts=10):
                     SplitRings()
 
             with st.expander("📝 Run Summary", expanded=True):
-                RunSummary()
+                if splitChange: RunSummary()
+
 
         if fullRuns > min_attempts:  # Check if enough data is available
             try:
-                st.session_state.consistencyTracker = ConsistencyTracker()
+                if splitChange: st.session_state.consistencyTracker = ConsistencyTracker()
             except (IndexError, KeyError, TypeError) as skipped:
                 pass
         try:
             if fullRuns >= 1:  # Make sure there is data to analyse
-                st.session_state.pbPotential = PBPotential(simulations=100)
+                if splitChange: st.session_state.pbPotential = PBPotential(simulations=100)
         except (IndexError, KeyError, TypeError) as skipped:
             pass
 
