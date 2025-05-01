@@ -10,6 +10,8 @@ Make sure you have the Livesplit Server component within your Layout. This can b
 # Running the dashboard
 To run the dashboard, run `streamlit run speedrunDashboard.py SPLITS.lss` from a command-line within the dashboard folder directory. This should open the dashboard in a browser window.
 
+If you get an error "streamlit is not recognised as an internal or external program", you will need to create a new PATH within your environment variables to the directory displayed in this error message. Then restart the command-line prompt.
+
 Don't forget to start the Livesplit server by right-clicking on your splits -> Control -> Start Server. If you change layout or re-open your splits this may have to be started again.
 
 If the dashboard crashes or freezes, it can be restarted by refreshing the browser tab.

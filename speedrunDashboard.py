@@ -476,8 +476,7 @@ def RunTime(min_attempts=10):
                     SplitRings()
 
             with st.expander("📝 Run Summary", expanded=True):
-                if splitChange: RunSummary()
-
+                RunSummary()
 
         if fullRuns > min_attempts:  # Check if enough data is available
             try:
@@ -567,7 +566,7 @@ def main(args):
     recentRuns = []
     for i in range(len(splits.segments)):
         segs = []
-        for j in range(max(-fullRuns, -100), -1):  # If splits contain less than 100 runs, take max
+        for j in range(max(-fullRuns, -30), -1):  # If splits contain less than 30 runs, take max
             seg = json.loads(splits.segments[i].segment_history[j].model_dump_json())
             segs.append(splitToSeconds(seg['real_time']))
 
